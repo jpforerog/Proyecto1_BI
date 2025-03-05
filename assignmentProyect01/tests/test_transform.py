@@ -1,0 +1,221 @@
+import pandas as pd
+from pytest import fixture
+from src.config import QUERY_RESULTS_ROOT_PATH, DATASET_ROOT_PATH, PUBLIC_HOLIDAYS_URL
+from sqlalchemy import create_engine
+from sqlalchemy.engine.base import Engine
+import json
+import math
+from src.transform import (
+    query_delivery_date_difference,
+    query_global_ammount_order_status,
+    query_revenue_by_month_year,
+    query_revenue_per_state,
+    query_top_10_least_revenue_categories,
+    query_top_10_revenue_categories,
+    query_real_vs_estimated_delivered_time,
+    query_orders_per_day_and_holidays_2017,
+    query_freight_value_weight_relationship,
+)
+from src.load import load
+from src.extract import extract
+from src.config import get_csv_to_table_mapping
+from src.transform import QueryResult
+
+TOLERANCE = 0.1
+
+
+def to_float(objs, year_col):
+    return list(map(lambda obj: float(obj[year_col]) if obj[year_col] else 0.0, objs))
+
+
+def float_vectors_are_close(a: list, b: list, tolerance: float = TOLERANCE) -> bool:
+    """Check if two vectors of floats are close.
+    Args:
+        a (list): The first vector.
+        b (list): The second vector.
+        tolerance (float): The tolerance.
+    Returns:
+        bool: True if the vectors are close, False otherwise.
+    """
+    return all([math.isclose(a[i], b[i], abs_tol=tolerance) for i in range(len(a))])
+
+
+@fixture(scope="session", autouse=True)
+def database() -> Engine:
+    """Initialize the database for testing."""
+    engine = create_engine("sqlite://")
+    csv_folder = DATASET_ROOT_PATH
+    public_holidays_url = PUBLIC_HOLIDAYS_URL
+    csv_table_mapping = get_csv_to_table_mapping()
+    csv_dataframes = extract(csv_folder, csv_table_mapping, public_holidays_url)
+    load(data_frames=csv_dataframes, database=engine)
+    return engine
+
+
+def read_query_result(query_name: str) -> dict:
+    """Read the query from the json file.
+    Args:
+        query_name (str): The name of the query.
+    Returns:
+        dict: The query as a dictionary.
+    """
+    with open(f"{QUERY_RESULTS_ROOT_PATH}/{query_name}.json", "r") as f:
+        query_result = json.load(f)
+
+    return query_result
+
+
+def pandas_to_json_object(df: pd.DataFrame) -> dict:
+    """Convert pandas dataframe to json object.
+    Args:
+        df (pd.DataFrame): The dataframe.
+    Returns:
+        dict: The dataframe as a json object.
+    """
+    return json.loads(df.to_json(orient="records"))
+
+
+def test_query_revenue_by_month_year(database: Engine):
+    query_name = "revenue_by_month_year"
+    actual = pandas_to_json_object(query_revenue_by_month_year(database).result)
+    expected = read_query_result(query_name)
+
+    def to_float(objs, year_col):
+        return list(
+            map(lambda obj: float(obj[year_col]) if obj[year_col] else 0.0, objs)
+        )
+
+    print("Actual Year2016:", to_float(actual, "Year2016"))
+    print("Expected Year2016:", to_float(expected, "Year2016"))
+
+    assert len(actual) == len(expected)
+    assert [obj["month_no"] for obj in actual] == [obj["month_no"] for obj in expected]
+    assert float_vectors_are_close(
+        to_float(actual, "Year2016"), to_float(expected, "Year2016")
+    )
+    assert float_vectors_are_close(
+        to_float(actual, "Year2017"), to_float(expected, "Year2017")
+    )
+    assert float_vectors_are_close(
+        to_float(actual, "Year2018"), to_float(expected, "Year2018")
+    )
+    assert list(actual[0].keys()) == list(expected[0].keys())
+#[{"month_no":"01","month":"Jan","Year2016":0.0,"Year2017":37632.57,"Year2018":969967.8000000026},{"month_no":"02","month":"Feb","Year2016":0.0,"Year2017":222270.7499999996,"Year2018":853616.8200000001},{"month_no":"03","month":"Mar","Year2016":0.0,"Year2017":376833.720000001,"Year2018":1024851.949999999},{"month_no":"04","month":"Apr","Year2016":0.0,"Year2017":299798.4500000001,"Year2018":1274742.1799999899},{"month_no":"05","month":"May","Year2016":0.0,"Year2017":579280.4300000027,"Year2018":1150528.9299999974},{"month_no":"06","month":"Jun","Year2016":0.0,"Year2017":489463.420000003,"Year2018":1141543.8499999994},{"month_no":"07","month":"Jul","Year2016":0.0,"Year2017":518115.1900000033,"Year2018":925958.7900000032},{"month_no":"08","month":"Aug","Year2016":0.0,"Year2017":609180.3400000022,"Year2018":1319737.6599999934},{"month_no":"09","month":"Sep","Year2016":0.0,"Year2017":652576.4800000003,"Year2018":12875.18},{"month_no":"10","month":"Oct","Year2016":34116.28,"Year2017":740570.3999999999,"Year2018":347.95},{"month_no":"11","month":"Nov","Year2016":10734.64,"Year2017":733047.3300000001,"Year2018":0.0},{"month_no":"12","month":"Dec","Year2016":960.85,"Year2017":1082600.6899999967,"Year2018":0.0}]
+
+def test_query_delivery_date_difference(database: Engine):
+    query_name = "delivery_date_difference"
+    actual: QueryResult = query_delivery_date_difference(database)
+    expected = read_query_result(query_name)
+    actual_json = pandas_to_json_object(actual.result)
+    expected_json = expected
+
+    print("actual: ", actual_json)
+    print("expected: ", expected_json)
+    assert pandas_to_json_object(actual.result) == expected
+
+
+def test_query_global_ammount_order_status(database: Engine):
+    query_name = "global_ammount_order_status"
+    actual: QueryResult = query_global_ammount_order_status(database)
+    expected = read_query_result(query_name)
+    assert pandas_to_json_object(actual.result) == expected
+
+
+def test_query_revenue_per_state(database: Engine):
+    query_name = "revenue_per_state"
+    actual = pandas_to_json_object(query_revenue_per_state(database).result)
+    expected = read_query_result(query_name)
+    print("actual: ",actual)
+    print("expected: ",expected)
+    assert len(actual) == len(expected)
+    assert list(actual[0].keys()) == list(expected[0].keys())
+    assert float_vectors_are_close(
+        [obj["Revenue"] for obj in actual], [obj["Revenue"] for obj in expected]
+    )
+#[{"customer_state":"SP","Revenue":5769081.2699999018},{"customer_state":"RJ","Revenue":2055690.4499999913},{"customer_state":"MG","Revenue":1819277.6100000101},{"customer_state":"RS","Revenue":861608.3999999964},{"customer_state":"PR","Revenue":781919.5499999981},{"customer_state":"SC","Revenue":595208.4000000015},{"customer_state":"BA","Revenue":591270.6000000015},{"customer_state":"DF","Revenue":346146.17},{"customer_state":"GO","Revenue":334294.2200000007},{"customer_state":"ES","Revenue":317682.6500000007}]
+
+
+def test_query_top_10_least_revenue_categories(database: Engine):
+    query_name = "top_10_least_revenue_categories"
+    actual = pandas_to_json_object(
+        query_top_10_least_revenue_categories(database).result
+    )
+    expected = read_query_result(query_name)
+    print("actual", actual)
+    print("expected", expected)
+    assert len(actual) == len(expected)
+    assert list(actual[0].keys()) == list(expected[0].keys())
+    assert [obj["Category"] for obj in actual] == [obj["Category"] for obj in expected]
+    assert [obj["Num_order"] for obj in actual] == [
+        obj["Num_order"] for obj in expected
+    ]
+    assert float_vectors_are_close(
+        [obj["Revenue"] for obj in actual], [obj["Revenue"] for obj in expected]
+    )
+
+
+def test_query_top_10_revenue_categories(database: Engine):
+    query_name = "top_10_revenue_categories"
+    actual = pandas_to_json_object(query_top_10_revenue_categories(database).result)
+    expected = read_query_result(query_name)
+    assert len(actual) == len(expected)
+    assert list(actual[0].keys()) == list(expected[0].keys())
+    assert [obj["Category"] for obj in actual] == [obj["Category"] for obj in expected]
+    assert [obj["Num_order"] for obj in actual] == [
+        obj["Num_order"] for obj in expected
+    ]
+    assert float_vectors_are_close(
+        [obj["Revenue"] for obj in actual], [obj["Revenue"] for obj in expected]
+    )
+
+
+def test_real_vs_estimated_delivered_time(database: Engine):
+    query_name = "real_vs_estimated_delivered_time"
+    actual = pandas_to_json_object(
+        query_real_vs_estimated_delivered_time(database).result
+    )
+    expected = read_query_result(query_name)
+
+    def to_float(objs, year_col):
+        return list(
+            map(lambda obj: float(obj[year_col]) if obj[year_col] else 0.0, objs)
+        )
+
+    assert len(actual) == len(expected)
+    assert list(actual[0].keys()) == list(expected[0].keys())
+    assert [obj["month_no"] for obj in actual] == [obj["month_no"] for obj in expected]
+    assert float_vectors_are_close(
+        to_float(actual, "Year2016_real_time"), to_float(expected, "Year2016_real_time")
+    )
+    assert float_vectors_are_close(
+        to_float(actual, "Year2017_real_time"), to_float(expected, "Year2017_real_time")
+    )
+    assert float_vectors_are_close(
+        to_float(actual, "Year2018_real_time"), to_float(expected, "Year2018_real_time")
+    )
+    assert float_vectors_are_close(
+        to_float(actual, "Year2016_estimated_time"),
+        to_float(expected, "Year2016_estimated_time"),
+    )
+    assert float_vectors_are_close(
+        to_float(actual, "Year2017_estimated_time"),
+        to_float(expected, "Year2017_estimated_time"),
+    )
+    assert float_vectors_are_close(
+        to_float(actual, "Year2018_estimated_time"),
+        to_float(expected, "Year2018_estimated_time"),
+    )
+
+
+def test_query_orders_per_day_and_holidays_2017(database: Engine):
+    query_name = "orders_per_day_and_holidays_2017"
+    actual: QueryResult = query_orders_per_day_and_holidays_2017(database)
+    expected = read_query_result(query_name)
+    assert pandas_to_json_object(actual.result) == expected
+
+
+def test_query_get_freight_value_weight_relationship(database: Engine):
+    query_name = "get_freight_value_weight_relationship"
+    actual: QueryResult = query_freight_value_weight_relationship(database)
+    expected = read_query_result(query_name)
+    assert pandas_to_json_object(actual.result) == expected
